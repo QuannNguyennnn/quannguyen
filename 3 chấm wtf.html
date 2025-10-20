@@ -1,0 +1,322 @@
+<!-- index.html -->
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Rain Text</title>
+  <style>
+    :root{
+      --bg:#0b0f1a;
+      --text:#ffffff;
+      --panel-bg: rgba(0,0,0,0.35);
+    }
+    html,body{height:100%;margin:0;background:var(--bg);color:var(--text);font-family:Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;}
+    #wrap{position:relative;height:100vh;overflow:hidden;display:flex;align-items:center;justify-content:center;}
+    canvas{position:absolute;inset:0;display:block;}
+    .panel{
+      position:relative;z-index:10;
+      padding:24px 28px;border-radius:16px;
+      background:var(--panel-bg);backdrop-filter: blur(6px);
+      box-shadow: 0 6px 30px rgba(0,0,0,0.6);
+      text-align:center;max-width:90vw;
+    }
+    h1{margin:0 0 8px;font-size:clamp(20px,5vw,44px);letter-spacing:1px;}
+    p.meta{margin:0;color:rgba(255,255,255,0.8);font-size:14px;}
+    footer.small{margin-top:10px;font-size:12px;color:rgba(255,255,255,0.65);}
+    .controls{margin-top:12px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap;}
+    .btn{background:transparent;border:1px solid rgba(255,255,255,0.12);padding:6px 10px;border-radius:8px;color:var(--text);cursor:pointer}
+    .btn:active{transform:translateY(1px)}
+    pre.debug{margin-top:12px;max-height:160px;overflow:auto;text-align:left;background:rgba(0,0,0,0.25);padding:10px;border-radius:8px;font-size:13px}
+    @media (max-width:520px){
+      .panel{padding:18px}
+    }
+    
+  </style>
+  <style>
+#subtitle {
+  opacity: 0;
+  transition: opacity 1s ease;
+}
+</style>
+</head>
+<body>
+  <div id="wrap">
+    <canvas id="rain"></canvas>
+
+    <div class="panel" id="panel">
+      <h1 id="title">Chúc Hân có một buổi tối 20/10 vui vẻ</h1>
+      <p class="meta" id="subtitle">"C:\Users\ASUS\Downloads\97138881-d20b-42d0-a94a-2ebb0bac2945.gif"</p>
+
+      <div class="controls">
+        <button class="btn" id="pauseBtn">Tạm dừng</button>
+        <button class="btn" id="resumeBtn" style="display:none">Tiếp tục</button>
+        <button class="btn" id="copyBtn">Chuyển trang</button>
+
+      </div>
+
+      <pre class="debug" id="debug" style="display:none"></pre>
+      <footer class="small"></footer>
+    </div>
+  </div>
+   <script>
+    // Hiệu ứng gõ chữ từng ký tự
+    function typeText(element, text, speed = 80, callback) {
+      element.textContent = '';
+      let i = 0;
+      function typing() {
+        if (i < text.length) {
+          element.textContent += text.charAt(i);
+          i++;
+          setTimeout(typing, speed);
+        } else if (callback) {
+          callback();
+        }
+      }
+      typing();
+    }
+
+    document.addEventListener("DOMContentLoaded", () => {
+      const titleEl = document.getElementById("title");
+      const subtitleEl = document.getElementById("subtitle");
+      const originalText = titleEl.textContent.trim();
+
+      // Ẩn phụ đề (GIF)
+      subtitleEl.style.opacity = 0;
+
+      // Gõ chữ từng ký tự
+      typeText(titleEl, originalText, 90, () => {
+        // Sau khi gõ xong, hiện phụ đề mờ dần
+        subtitleEl.style.transition = "opacity 1s ease";
+        subtitleEl.style.opacity = 1;
+      });
+    });
+
+  </script>
+
+<script>
+/*
+  Giải thích:
+  - Đọc tham số "id" từ URL
+  - Base64 URL-safe => bytes => TextDecoder => JSON.parse
+  - JSON dự kiến có fields như: { "rainText": "I LOVE YOU", "rainColor": "#f584b7", ... }
+  - Vẽ hiệu ứng mưa chữ lên canvas, sử dụng rainText cho ký tự mưa.
+*/
+
+// Lấy giá trị param
+function getParam(name){
+  const params = new URLSearchParams(location.search);
+  return params.get(name);
+}
+
+// Chuyển Base64 URL-safe -> Uint8Array
+function base64UrlToUint8Array(b64url){
+  if(!b64url) return null;
+  // chuẩn hóa padding & ký tự
+  b64url = b64url.replace(/-/g, '+').replace(/_/g, '/');
+  while (b64url.length % 4) b64url += '=';
+  const bin = atob(b64url);
+  const len = bin.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
+// Giải mã bytes -> UTF-8 string
+function uint8ArrayToString(u8){
+  try{
+    return new TextDecoder().decode(u8);
+  }catch(e){
+    // fallback
+    let s = '';
+    for(let i=0;i<u8.length;i++) s += String.fromCharCode(u8[i]);
+    try{return decodeURIComponent(escape(s));}catch(e2){return s;}
+  }
+}
+
+// Parse tham số id
+function parseIdParam(id){
+  try{
+    const bytes = base64UrlToUint8Array(id);
+    if(!bytes) return null;
+    const text = uint8ArrayToString(bytes);
+    return JSON.parse(text);
+  }catch(e){
+    console.warn('parseIdParam error', e);
+    return null;
+  }
+}
+
+/* ----- Rain animation (canvas) ----- */
+class Rain {
+  constructor(canvas, opts){
+    this.canvas = canvas;
+    this.ctx = canvas.getContext('2d', { alpha: true });
+    this.dpr = Math.max(1, window.devicePixelRatio || 1);
+    this.drops = [];
+    this.opts = Object.assign({
+      count: 220,
+      speedMin: 1.2,
+      speedMax: 3.2,
+      text: 'Hân',
+      color: '#a6e3fa',
+      fontSize: 18,
+      opacity: 0.85,
+    }, opts);
+    this.running = true;
+    this.resize();
+    window.addEventListener('resize', ()=>this.resize());
+    this._tick = this._tick.bind(this);
+    requestAnimationFrame(this._tick);
+  }
+
+  resize(){
+    const {canvas,dpr} = this;
+    canvas.width = Math.floor(canvas.clientWidth * dpr);
+    canvas.height = Math.floor(canvas.clientHeight * dpr);
+    this.ctx.setTransform(dpr,0,0,dpr,0,0);
+    // recreate drops based on new size
+    this._makeDrops();
+  }
+
+  _makeDrops(){
+    const w = this.canvas.clientWidth;
+    const h = this.canvas.clientHeight;
+    const {count, text, fontSize, speedMin, speedMax} = this.opts;
+    this.drops = [];
+    // prepare characters array
+    const chars = text.split('');
+    for(let i=0;i<count;i++){
+      const char = chars[Math.floor(Math.random()*chars.length)] || chars[0];
+      const size = fontSize * (0.6 + Math.random()*1.2);
+      this.drops.push({
+        x: Math.random()*w,
+        y: Math.random()*h - h,
+        vy: speedMin + Math.random()*(speedMax - speedMin),
+        char, size, alpha: 0.4 + Math.random()*0.6,
+        sway: (Math.random()-0.5)*1.4, swayAmp: 10 + Math.random()*20,
+      });
+    }
+  }
+
+  setOptions(opts){
+    Object.assign(this.opts, opts);
+    // recreate when text or count changed
+    this._makeDrops();
+  }
+
+  pause(){ this.running = false; }
+  resume(){ if(!this.running){ this.running = true; requestAnimationFrame(this._tick); } }
+
+  _tick(){
+    if(!this.running) return;
+    const ctx = this.ctx;
+    const w = this.canvas.clientWidth;
+    const h = this.canvas.clientHeight;
+    // clear with slight transparent fill for trailing effect
+    ctx.fillStyle = 'rgba(6,8,14,0.25)';
+    ctx.fillRect(0,0,w,h);
+
+    ctx.textBaseline = 'top';
+    for(const d of this.drops){
+      // sway movement
+      d.x += Math.sin(d.y * 0.02) * d.sway * 0.6;
+      d.y += d.vy;
+      if(d.y > h + 20){
+        d.y = -30 - Math.random()*h*0.3;
+        d.x = Math.random()*w;
+      }
+
+      ctx.globalAlpha = d.alpha * (this.opts.opacity ?? 1);
+      ctx.font = `${Math.round(d.size)}px system-ui, Arial`;
+      ctx.fillStyle = this.opts.color;
+      // draw character
+      ctx.fillText(d.char, d.x, d.y);
+      // small drop tail
+      ctx.fillRect(d.x + d.size*0.12, d.y + d.size, 1, Math.min(8, d.vy*4));
+    }
+
+    ctx.globalAlpha = 1;
+    requestAnimationFrame(this._tick);
+  }
+}
+
+/* ----- Init app ----- */
+(function(){
+  const id = getParam('id');
+  const data = parseIdParam(id) || {};
+
+  // Default values if missing in JSON
+  const rainText = (data.rainText || data.rainText === '') ? data.rainText : (data.message || 'Happy Womens Day');
+  const rainColor = data.rainColor || '#f584b7';
+  const titleText = data.title || 'Chúc Hân có một buổi tối 20/10 vui vẻ';
+  const subtitle = data.description || data.msg || '';
+
+  // UI elements
+  const titleEl = document.getElementById('title');
+  const subtitleEl = document.getElementById('subtitle');
+  const debugEl = document.getElementById('debug');
+
+  titleEl.textContent = titleText;
+  subtitleEl.textContent = subtitle || `\ "${rainText}" `;
+
+  // show debug JSON (optional)
+  //debugEl.style.display = 'block';
+  //debugEl.textContent = JSON.stringify(data, null, 2);
+
+  // Canvas init
+  const canvas = document.getElementById('rain');
+  // ensure canvas fills parent
+  canvas.style.width = '100%';
+  canvas.style.height = '100%';
+
+  const rain = new Rain(canvas, {
+    text: rainText || 'I LOVE YOU',
+    color: rainColor,
+    fontSize: data.fontSize ? Number(data.fontSize) : 20,
+    count: data.count ? Number(data.count) : 220,
+    speedMin: data.speedMin ? Number(data.speedMin) : 1.6,
+    speedMax: data.speedMax ? Number(data.speedMax) : 3.2,
+    opacity: data.opacity ? Number(data.opacity) : 0.95
+  });
+
+  // Buttons
+  const pauseBtn = document.getElementById('pauseBtn');
+  const resumeBtn = document.getElementById('resumeBtn');
+  const copyBtn = document.getElementById('copyBtn');
+
+  pauseBtn.addEventListener('click', ()=>{
+    rain.pause();
+    pauseBtn.style.display='none';
+    resumeBtn.style.display='';
+  });
+  resumeBtn.addEventListener('click', ()=>{
+    rain.resume();
+    resumeBtn.style.display='none';
+    pauseBtn.style.display='';
+  });
+  copyBtn.addEventListener('click', async ()=>{
+    try{
+      await navigator.clipboard.writeText(rainText);
+      copyBtn.textContent = 'Đã sao chép ✓';
+      setTimeout(()=>copyBtn.textContent='Sao chép văn bản',1200);
+    }catch(e){
+      copyBtn.textContent = 'Không sao chép được';
+      setTimeout(()=>copyBtn.textContent='Sao chép văn bản',1200);
+    }
+  });
+
+  // small accessibility: update panel background based on color brightness
+  try{
+    const c = rainColor.replace('#','');
+    const r = parseInt(c.substring(0,2),16);
+    const g = parseInt(c.substring(2,4),16);
+    const b = parseInt(c.substring(4,6),16);
+    const lum = 0.2126*r + 0.7152*g + 0.0722*b;
+    if(lum > 160) document.documentElement.style.setProperty('--panel-bg','rgba(0,0,0,0.25)');
+  }catch(e){}
+})();
+
+</script>
+</body>
+</html>
